@@ -1,0 +1,44 @@
+services:
+  main:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: namazyake/roscar2:cu126
+    container_name: roscar2
+    volumes:
+      - /home/yl00/pius:/home/orin/dev/ws/colcon_ws:rw
+      # Share host /tmp (not just /tmp/argus_socket): nvargus-daemon recreates its socket when restarted,
+      # and a file-level bind mount would keep pointing at the old, dead socket
+      - /tmp:/tmp:rw
+      # Bind-mount (not "devices") so a controller that reconnects as a new /dev/input/eventN is visible
+      - /dev/input:/dev/input
+      # Host /dev (read-only view) for hot-pluggable USB serial devices such as the IMU (/host_dev/serial/by-id/...)
+      - /dev:/host_dev:ro
+      # NVIDIA's Jetson.GPIO from the host (not in the image) for the wheel speed sensor on the 40-pin header
+      - /usr/lib/python3/dist-packages/Jetson:/usr/lib/python3/dist-packages/Jetson:ro
+    device_cgroup_rules:
+      - "c 13:* rmw"  # input devices (major 13)
+      - "c 188:* rmw"  # USB serial /dev/ttyUSB* (major 188, e.g. WitMotion IMU via CH340)
+    devices:
+      - /dev/i2c-7:/dev/i2c-7  # PCA9685
+      - /dev/video0:/dev/video0
+      - /dev/ttyTHS1:/dev/ttyTHS1  # PIUS vehicle serial (sender_node)
+      - /dev/gpiochip0:/dev/gpiochip0  # 40-pin header GPIO (wheel speed sensor)
+      - /dev/gpiochip1:/dev/gpiochip1
+    group_add:
+      - "101"  # input
+      - "116"  # i2c
+      - "20"   # dialout (USB serial)
+      - "999"  # gpio
+    ports:
+      - "8888:8888"
+      - "8080:8080"  # Web dashboard (dashboard_node)
+    shm_size: 8gb
+    runtime: nvidia
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: all
+      # /proc/device-tree is hidden inside containers, so tell Jetson.GPIO the board model
+      JETSON_MODEL_NAME: JETSON_ORIN_NANO
+    tty: true
+    stdin_open: true

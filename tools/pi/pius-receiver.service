@@ -1,0 +1,21 @@
+# PIUS の受信プログラム（Jetson のシリアル → PWM）を Raspberry Pi の起動時に動かすサービス
+# SSH の接続とは無関係に動き続ける。落ちたら 1 秒後に自動で再起動する。
+# 設置: Jetson で tools/pi/install_receiver.sh を実行（/etc/systemd/system/ にコピーして有効化）
+[Unit]
+Description=PIUS receiver (Jetson serial -> steering / throttle / brake PWM)
+After=pigpiod.service
+Requires=pigpiod.service
+
+[Service]
+Type=simple
+User=ais-pius
+WorkingDirectory=/home/ais-pius
+ExecStart=/usr/bin/python3 -u /home/ais-pius/receiver_.py
+Restart=always
+RestartSec=1
+# どんな止まり方でも（異常終了・kill -9 を含む）、最後にピンを安全な値にする:
+# ステア中央 1500 (GPIO19)・アクセル停止 1000 (GPIO12)・フルブレーキ 1135 (GPIO13)・ドライブ / リバース LOW (GPIO16 / 26)
+ExecStopPost=/usr/bin/pigs s 19 1500 s 12 1000 s 13 1135 w 16 0 w 26 0
+
+[Install]
+WantedBy=multi-user.target

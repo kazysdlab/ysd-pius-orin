@@ -1,0 +1,220 @@
+# PIUS Autonomous Driving System Configuration
+
+# CSI Camera Configuration
+camera:
+  output_topic: "/camera/image_raw"
+  sensor_id: 0
+  capture_size: [1280, 720]
+  capture_fps: 60
+  resize: [320, 128]            # モデル用画像のサイズ [幅, 高さ]（waypoint モデルの入力）
+  crop: [0, 208, 1280, 512]     # モデル用画像に使う範囲 [x, y, 幅, 高さ]（capture_size の座標）。上の空を除く。カメラの向きに合わせて調整
+  flip_method: 2                # 画像の回転（nvvidconv）。2 = 180° 回転。カメラが車両に上下逆に取り付けられているため（7 月の走行データで確認）
+  pub_hz: 10.0                  # モデル用画像の送信頻度（推論・記録）
+  stall_timeout: 3.0            # フレームがこの秒数届かなければ取得停止とみなしカメラノードを再起動
+  max_reconnect_interval: 5.0   # 再接続の試行間隔の上限 [秒]
+  restart_after_failures: 5     # この回数続けて接続に失敗したらカメラノードを再起動して接続し直す（0で無効）
+  preview_topic: "/camera/preview/compressed"  # ダッシュボード表示専用の画像（JPEG。推論・記録には使わない）
+  preview_hz: 15.0              # 表示用画像の送信頻度。0 で無効（カメラは resize で直接取り込み、ダッシュボードは output_topic の画像を表示）
+  preview_size: [640, 360]      # 表示用画像のサイズ（capture_size と同じ 16:9）。カメラはこのサイズで取り込み、モデル用画像はそこから切り出して縮小
+  preview_jpeg_quality: 80
+  # 表示用画像（ダッシュボード）だけにかける色の補正 [赤, 緑, 青] の倍率。モデル用画像・学習データには使わない。
+  # 色補正ファイル（Jetson Nano 用）で全体が紫寄りになる分を戻す。仮: 屋内の蛍光灯の下で白い壁から測った値
+  # 測り方: python3 tools/camera_white_balance.py（白い紙を写して実行）
+  preview_white_balance: [0.909, 1.0, 0.781]
+  verbose: 1
+  unverified: [preview_white_balance]   # 仮の値。実際の映像で確認したら、ここから名前を消す（calibration.py）。crop は 2026-11-06 に確認済み
+
+# GP (Dummy Joy) Configuration
+dummy_joy:
+  output_topic: "/gamepad/state"
+  update_hz: 100.0
+  pub_hz: 10.0
+  pattern: "zigzag" # "straight", "turn", "stop", "zigzag"
+  speed_step: 0.2
+  steering_step: 0.5
+  verbose: 1
+
+# P_GP (Parser) Configuration
+parser:
+  input_topic: "/gamepad/state"
+  output_topic_manual: "/cmd/normalized/manual"
+  output_topic_mode: "/cmd/mode"
+  output_topic_record: "/cmd/record"
+  output_topic_shift: "/cmd/shift"
+  steering_channel: 0
+  throttle_channel: 1
+  verbose: 1
+
+# MUX (Manager) Configuration
+mux:
+  input_topic_manual: "/cmd/normalized/manual"
+  input_topic_auto: "/cmd/normalized/auto"
+  input_topic_mode: "/cmd/mode"       # "manual" / "auto" / "toggle" を受け付ける
+  output_topic: "/cmd/normalized"
+  output_topic_status: "/mux/mode"    # 現在の走行モード（MUXが唯一の管理者）
+  default_mode: "manual" # "manual" or "auto"（autoの場合は推論とコントローラーの準備が整い次第AUTOへ）
+  source_timeout_sec: 0.5             # 入力がこの秒数途絶えたらAUTOを拒否・中断して安全停止
+  verbose: 1
+
+# Inf (Inference) Configuration
+inference:
+  input_topic_image: "/camera/image_raw"
+  output_topic_auto: "/cmd/normalized/auto"
+  model_path: "/home/orin/dev/ws/colcon_ws/models/waypoint.pth"   # train_waypoint.py で学習した waypoint モデル
+  output_topic_waypoints: "/inference/waypoints"   # 予測した waypoint（JSON、後軸中心の座標 [m]）
+  verbose: 1
+
+# Save (HDF5) Configuration
+save:
+  input_topic_image: "/camera/image_raw"
+  input_topic_controls: "/cmd/normalized"
+  input_topic_record: "/cmd/record"
+  input_topic_mode: "/mux/mode"       # MANUAL中のみ記録する
+  save_dir: "/home/orin/dev/ws/colcon_ws/data"
+  file_prefix: "pius_drive"
+  # 記録する条件: "moving" = 車速センサーで車が動いている間（止まってから stop_hold_sec 秒まで）。ペダル運転・惰性・
+  # ブレーキ中も記録し、操作量が届かないときは steering / throttle / brake を NaN にする（waypoint モデル用）。
+  # "throttle" = 以前の条件（操作量が届き、スロットルが min_throttle_threshold 以上のときだけ）
+  record_when: "moving"
+  min_speed_mps: 0.05                 # これより速ければ「動いている」
+  stop_hold_sec: 2.0                  # 止まってからこの秒数は記録を続ける（止まる場面も学習に入れる）
+  save_on_throttle_only: true         # record_when: "throttle" のときだけ使う
+  min_throttle_threshold: 0.05
+  max_control_age_sec: 0.3            # 操作量がこの秒数より古ければ保存しない（ノード停止時の値の固着対策）
+  input_topic_imu: "/imu/status"      # IMU/GPSの値も各フレームと一緒に記録する（未接続時は NaN）
+  max_imu_age_sec: 0.3                # IMUの値がこの秒数より古ければ NaN として記録
+  input_topic_imu_raw: "/imu/data"    # IMU の全サンプル（50 Hz）を画像とは別系列で記録（経路の正解データ作成用）
+  input_topic_gps: "/gps/fix"
+  input_topic_wheel_pulse: "/wheel/pulse"
+  input_topic_wheel_status: "/wheel/status"
+  pre_record_sec: 10.0                # 最初のフレームを保存する前の高頻度データはこの秒数分だけ残す
+  buffer_size: 100
+  verbose: 1
+
+# IMU / GPS (WitMotion WTGAHRS3) Configuration
+imu:
+  # ホストの /dev は /host_dev にマウント（docker-compose.yml）。抜き差ししても変わらない固定パスを使う
+  port: "/host_dev/serial/by-id/usb-1a86_USB_Serial-if00-port0"
+  baudrate: 115200                    # tools/imu_config.py --apply で 50 Hz・115200 bps に設定済み（出荷時は 9600）
+  imu_topic: "/imu/data"              # sensor_msgs/Imu
+  gps_topic: "/gps/fix"               # sensor_msgs/NavSatFix
+  status_topic: "/imu/status"         # ダッシュボード・記録用のまとめ（JSON）
+  frame_id: "imu_link"
+  gps_frame_id: "gps_link"
+  data_timeout_sec: 1.0               # この秒数データが来なければ「データなし」と通知
+  reconnect_interval: 1.0             # 抜けたときの再接続の試行間隔 [秒]
+  verbose: 1
+
+# Wheel speed sensor (reed switch on the rear-left brake disc, 1 pulse per wheel revolution)
+# PIUS 純正の速度計のセンサー（配線図の MGS）を純正の表示器（SPM）から外して Jetson につないでいる（純正の速度表示は停止中）
+wheel:
+  pin: 7                              # 40ピンヘッダの BOARD 番号（74HC14 バッファ経由、スイッチが閉じると High）
+  circumference_m: 1.249              # 後輪左タイヤの外周 [m]。実測: 5 回転で 624.5 cm（2026-10-13。公称 3.00-10 の 406.4 mm × π = 1.277 m より 2.2% 小さい）。0 だと速度は計算せずパルスだけ記録する
+  pulses_per_rev: 4                   # 1 回転あたりのパルス数 = 車輪の磁石の数（等間隔に付ける）。磁石を 4 個にしたら 4 にする
+  # パルスの検証の基準（磁石を増やしたら、実際の走行ログで tools/speed_replay.py を使って見直す）
+  min_distance_ratio: 0.6             # 発進直後のパルスは、IMU の移動距離がパルス間隔の距離のこの割合未満なら除外（too_short）
+  jump_margin_mps: 0.4                # パルス間隔の速度の上がり方が、IMU で説明できる分よりこれ以上大きければ除外（too_sudden）
+  stable_ms: 10                       # 入力がこの時間 High のまま続いたらパルスと判定（短いノイズ・チャタリングを除去）
+  max_speed_kmh: 8.0                  # これより速い間隔のパルスはありえないので除外（車両の設定上の最高速度 5 km/h + 余裕）
+  imu_topic: "/imu/data"              # IMU があればパルスの検証と、パルス間の速度の補間に使う（なければパルスのみ）
+  imu_forward_axis: [-0.002, 1.000]   # 車の前方向を IMU の x, y で表したもの。2026-11-06 の A の走行 3 本から推定（tools/imu_forward_axis.py。IMU の y 軸がほぼ前）
+  stop_timeout_sec: 3.0               # IMU がないとき、この秒数パルスがなければ停止とみなす
+  pulse_topic: "/wheel/pulse"         # 採用したパルスの時刻（JSON）
+  rejected_topic: "/wheel/pulse_rejected"  # 除外したパルスと理由（JSON、確認用）
+  unverified: []                      # 仮の値の一覧。外周は実測済み（2026-10-13）、IMU の前方向は推定済み（2026-11-06）
+  status_topic: "/wheel/status"       # 推定速度など（JSON, 10 Hz）
+  verbose: 1
+
+# Dashboard (Web GUI) Configuration
+dashboard:
+  host: "0.0.0.0"
+  port: 8080                          # ブラウザで http://localhost:8080（Jetson 本体）か http://<Tailscale の IP>:8080 を開く
+  # アクセスを許可する接続元。localhost と Tailscale（100.64.0.0/10・fd7a:115c:a1e0::/48）のみ。ローカルネットワークは拒否（403）
+  allowed_networks: ["127.0.0.0/8", "::1/128", "100.64.0.0/10", "fd7a:115c:a1e0::/48"]
+  allow_docker_gateway: true          # Jetson 本体の localhost からの接続は、コンテナには Docker の中継アドレスとして届くため許可
+  jpeg_quality: 80
+  health_timeout_sec: 3.0             # この秒数ハートビートが途絶えたノードを「応答なし」と表示
+
+# Sender (Serial) Configuration
+sender:
+  protocol: "pius" # "pius" or "donkey" (default: "pius")
+  input_topic: "/cmd/normalized"
+  port: "/dev/ttyTHS1" # PIUS serial port on Jetson
+  baudrate: 115200
+  write_hz: 30.0
+  message_format: "S{steering_pwm}T{throttle_pwm}\n" # Output format for donkey protocol
+  steering:
+    channel: 0
+    left_pwm: 290
+    right_pwm: 490
+    center_pwm: 390
+  throttle:
+    channel: 1
+    forward_pwm: 500
+    stopped_pwm: 370
+    reverse_pwm: 220
+  # 前進・後退の切り替えは、アクセルを離した状態で行う（補足資料の注意事項）。pius プロトコルのみ
+  shift_hold_sec: 0.3                 # 切り替えの前後に、アクセルを 1000（オフ）に保つ時間
+  neutral_delay_sec: 0.5              # アクセルを離してから N に戻すまでの時間（速度制御で D と N を行き来しないように）
+  verbose: 1
+
+# ---------------------------------------------------------------------------------------------------------
+# 未確定のパラメータについて: 各セクションの `unverified` に並べた項目は「仮の値」です。
+# 起動時のログ・ダッシュボードの警告・記録ファイル（unverified_params 属性）・学習時の表示で知らせます。
+# 実際の値を入れたら、そのセクションの unverified から名前を消してください。
+# 一覧は python3 tools/check_calibration.py で確認できます。
+# ---------------------------------------------------------------------------------------------------------
+
+# Vehicle geometry and steering (used by the controller and by the ground-truth path)
+vehicle:
+  wheelbase_m: 1.5                    # 軸距（PIUS 主要諸元）
+  rear_track_m: 0.92                  # 後輪の輪距（主要諸元）。左後輪の距離を後軸中央に換算するのに使う
+  yaw_sign: 1                         # IMU のヨーレートの符号（左回りが正なら 1、逆なら -1）。2026-11-06 に確認（左で +48°、右で -27°）
+  # ステア指令（-1 = 左いっぱい 〜 +1 = 右いっぱい）と前輪の操舵角 [deg]（左が正）の対応表 [[指令, 角度], ...]
+  # 仮: 補足資料（村上商会）のステアリング操作の表（設計値）から換算。各パルス幅を送信の式で指令に直し、内側・外側の
+  # 前輪の角度を cot δ = (cot δi + cot δo) / 2 で 1 つの角度にしたもの。表の外（-1〜-0.892、0.961〜1）は使わない
+  steer_table: [[-0.892, 27.04], [-0.737, 22.93], [-0.604, 18.67], [-0.463, 14.24], [-0.321, 9.66], [-0.130, 4.92],
+                [0.0, 0.0], [0.134, -4.92], [0.385, -9.66], [0.579, -14.24], [0.663, -18.67], [0.809, -22.93], [0.961, -27.04]]
+  unverified: [steer_table]
+
+# Camera geometry, only for drawing the predicted path on the camera image (1280x720 pixels, OpenCV fisheye)
+camera_geometry:
+  K: [[520.0, 0.0, 640.0], [0.0, 520.0, 360.0], [0.0, 0.0, 1.0]]   # 仮: 160° レンズの等距離射影を仮定
+  D: [0.0, 0.0, 0.0, 0.0]             # 仮: 歪み係数 k1..k4
+  position_m: [1.7, 0.0, 0.9]         # 仮: 後軸中央から見たカメラの位置 [前, 左, 上]
+  rpy_deg: [0.0, 15.0, 0.0]           # 仮: カメラの向き [ロール, ピッチ（下向きが正）, ヨー（左が正）]
+  unverified: [K, D, position_m, rpy_deg]
+
+# Vehicle-side controller: waypoints -> steering (Pure Pursuit) and throttle/brake (speed PID)
+controller:
+  input_topic_waypoints: "/inference/waypoints"
+  input_topic_wheel: "/wheel/status"
+  input_topic_imu: "/imu/data"
+  input_topic_mode: "/mux/mode"
+  output_topic: "/cmd/normalized/auto"   # mux が AUTO 中だけ車両に送る
+  status_topic: "/control/status"        # 制御の内部状態（JSON、10 Hz。ダッシュボード・記録用）
+  rate_hz: 50.0
+  waypoint_timeout_sec: 0.4           # waypoint がこの秒数より古ければ操作量を出さない（mux が停止・MANUAL へ）
+  speed_timeout_sec: 0.5              # 車速がこの秒数より古ければ操作量を出さない
+  # 横方向（Pure Pursuit）: 注視距離 = base + gain × 速度（min〜max に制限）
+  lookahead_base_m: 1.5
+  lookahead_gain_s: 0.8
+  lookahead_min_m: 1.2
+  lookahead_max_m: 4.5
+  steer_rate_limit: 3.0               # ステア指令の変化の上限 [1/s]（-1〜1 の範囲を 1 秒で 3 回分）
+  # 縦方向（目標速度 + PID）
+  target_speed_mps: 1.0               # 設定速度 [m/s]（3.6 km/h。車両の上限 5 km/h = 1.39 m/s 以下）
+  min_speed_mps: 0.4                  # カーブでもこれ以上は保つ（止まらないように）
+  max_speed_mps: 1.35                 # 実測速度がこれを超えたらブレーキ
+  max_lateral_acc: 0.6                # カーブで目標速度を下げる: v <= sqrt(横加速度 / 曲率) [m/s^2]
+  # スロットル（0〜1。送信は 1.0 + スロットル ms）と、モーターコントローラーが出す速度 [m/s] の対応表 [[スロットル, 速度], ...]
+  # 目標速度に必要なスロットルをこの表から引き、実測の速度との差を PI で補正する。
+  # 補足資料（村上商会）のアクセル操作の参考値: 1.2 ms → 0、1.4 → 0.5、1.5 → 1、1.6 → 2、1.8 → 4、2.0 ms → 5 km/h
+  throttle_table: [[0.2, 0.0], [0.4, 0.139], [0.5, 0.278], [0.6, 0.556], [0.8, 1.111], [1.0, 1.389]]
+  speed_kp: 0.5
+  speed_ki: 0.2
+  max_throttle: 0.9                   # スロットルの上限（表では 0.9 ≒ 4.5 km/h。車両側の上限は 5 km/h）
+  brake_gain: 1.0                     # 目標より速いとき: ブレーキ = gain × (超過速度 - 0.1)
+  allow_unverified: false             # true: AUTO に必須の値が仮のままでも操作量を出す（車輪を浮かせた試験専用）
+  verbose: 1
+  unverified: [lookahead_base_m, lookahead_gain_s, target_speed_mps, max_lateral_acc, throttle_table, speed_kp, speed_ki, brake_gain]

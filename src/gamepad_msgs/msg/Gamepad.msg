@@ -1,0 +1,2 @@
+gamepad_msgs/GamepadAxis axis
+gamepad_msgs/GamepadButtons buttons

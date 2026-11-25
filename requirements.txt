@@ -1,0 +1,6 @@
+smbus2
+evdev
+h5py
+pyserial
+pyyaml
+matplotlib

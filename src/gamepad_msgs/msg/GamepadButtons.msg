@@ -1,0 +1,14 @@
+bool cross
+bool circle
+bool square
+bool triangle
+bool l1
+bool l2
+bool l3
+bool r1
+bool r2
+bool r3
+bool touch
+bool share
+bool option
+bool ps

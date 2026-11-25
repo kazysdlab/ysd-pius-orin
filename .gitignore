@@ -1,0 +1,23 @@
+# ROS 2 build outputs
+build/
+install/
+log/
+
+# Python caching & artifacts
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+core.*
+
+# Dataset and Models (collected data and trained models should be ignored)
+data/
+models/
+
+# Editor/OS temporary files
+.vscode/
+.DS_Store
+
+# Virtual environments
+.venv/
+venv/
+env/

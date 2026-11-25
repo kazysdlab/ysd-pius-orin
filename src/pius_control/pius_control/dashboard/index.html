@@ -1,0 +1,804 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PIUS 走行モニター</title>
+<style>
+  :root {
+    --bg: #f3f4f6; --panel: #ffffff; --text: #111827; --muted: #6b7280; --line: #e5e7eb;
+    --ok: #16a34a; --ok-bg: #dcfce7; --warn: #b45309; --warn-bg: #fef3c7;
+    --bad: #dc2626; --bad-bg: #fee2e2; --info: #2563eb; --info-bg: #dbeafe;
+    --idle: #9ca3af; --track: #e5e7eb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115; --panel: #1a1d24; --text: #e5e7eb; --muted: #9ca3af; --line: #2d323c;
+      --ok: #4ade80; --ok-bg: #14301f; --warn: #fbbf24; --warn-bg: #3a2c0c;
+      --bad: #f87171; --bad-bg: #3b1515; --info: #60a5fa; --info-bg: #132a4a;
+      --idle: #6b7280; --track: #2d323c;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  /* Start-up splash with the YSD (Yoshida-Smart-Driver) logo: shown on every page load, tap / click to skip */
+  #splash { position: fixed; inset: 0; z-index: 1000; display: flex; flex-direction: column; align-items: center;
+            justify-content: center; gap: 14px; background: var(--bg); cursor: pointer; transition: opacity .5s ease; }
+  #splash.hide { opacity: 0; pointer-events: none; }
+  #splash pre { margin: 0; font-family: "DejaVu Sans Mono", Menlo, Consolas, monospace; line-height: 1.0;
+                white-space: pre; color: var(--text); font-size: 10px; transition: opacity 1.4s ease; }
+  #splash .splash-sub { color: var(--muted); font-size: 13px; transition: opacity 1.4s ease; }
+  #splash.fade-art pre, #splash.fade-art .splash-sub { opacity: 0; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Hiragino Sans", "Noto Sans CJK JP", "Yu Gothic", sans-serif;
+    font-size: 15px; line-height: 1.5;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 10;
+  }
+  header h1 { font-size: 18px; margin: 0; letter-spacing: .02em; }
+  .pill { padding: 3px 10px; border-radius: 999px; font-weight: 700; font-size: 13px; }
+  .pill.ok { background: var(--ok-bg); color: var(--ok); }
+  .pill.warn { background: var(--warn-bg); color: var(--warn); }
+  .pill.bad { background: var(--bad-bg); color: var(--bad); }
+  .spacer { flex: 1; }
+  #clock, #link { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .wrap { max-width: 1400px; margin: 0 auto; padding: 12px 16px 32px; display: grid; gap: 12px; }
+
+  #alerts { display: grid; gap: 6px; }
+  #alerts:empty { display: none; }
+  .alert { padding: 10px 14px; border-radius: 8px; font-weight: 600; border-left: 6px solid; }
+  .alert.bad { background: var(--bad-bg); color: var(--bad); border-color: var(--bad); }
+  .alert.warn { background: var(--warn-bg); color: var(--warn); border-color: var(--warn); }
+
+  .cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; min-width: 0; }
+  .card h2 { font-size: 13px; color: var(--muted); margin: 0 0 6px; font-weight: 600; }
+  .big { font-size: 34px; font-weight: 800; line-height: 1.15; letter-spacing: .02em; word-break: break-all; }
+  .big.model { font-size: 20px; }
+  .sub { color: var(--muted); font-size: 13px; margin-top: 2px; min-height: 1.5em; word-break: break-all; }
+  .key {
+    margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line);
+    font-size: 13px; color: var(--muted);
+  }
+  .btn {
+    display: inline-block; padding: 1px 8px; border-radius: 6px; border: 1px solid var(--line);
+    background: var(--bg); color: var(--text); font-weight: 700; font-size: 12px;
+  }
+  .c-ok { color: var(--ok); } .c-info { color: var(--info); } .c-bad { color: var(--bad); }
+  .c-warn { color: var(--warn); } .c-idle { color: var(--idle); }
+  .rec-dot { display: inline-block; width: .6em; height: .6em; border-radius: 50%; background: var(--bad); margin-right: .2em; vertical-align: .1em; animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: .25; } }
+
+  .main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 12px; }
+  .cam { position: relative; width: 100%; aspect-ratio: 4 / 3; background: #000; border-radius: 8px; overflow: hidden; }
+  .cam img, .cam canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+  .cam .nosignal {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: #fff; background: rgba(0,0,0,.6); font-weight: 700; font-size: 18px; text-align: center; padding: 16px;
+  }
+  .cam-meta { display: flex; gap: 14px; flex-wrap: wrap; color: var(--muted); font-size: 13px; margin-top: 6px; }
+  .legend-swatch { display: inline-block; width: 18px; height: 3px; vertical-align: middle; margin-right: 4px; border-radius: 2px; }
+
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 5px 4px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; }
+  td.num { text-align: right; width: 4.5em; font-weight: 600; }
+  .bar { position: relative; height: 12px; background: var(--track); border-radius: 6px; overflow: hidden; min-width: 60px; }
+  .bar .fill { position: absolute; top: 0; bottom: 0; background: var(--info); border-radius: 6px; }
+  .bar.center::after { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--muted); }
+  .bar .fill.brake { background: var(--bad); }
+  .bar .fill.manual { background: var(--ok); }
+  .rowlabel { width: 7.5em; white-space: nowrap; }
+  .section-gap { margin-top: 14px; }
+
+  .grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+  .light { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+  .light.ok { background: var(--ok); } .light.warn { background: var(--warn); }
+  .light.bad { background: var(--bad); } .light.idle { background: var(--idle); }
+  td.detail { color: var(--muted); font-size: 13px; word-break: break-all; }
+  td.state { white-space: nowrap; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chip { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); font-size: 13px; font-weight: 700; color: var(--muted); }
+  .chip.on { background: var(--info); border-color: var(--info); color: #fff; }
+  .guide td:first-child { white-space: nowrap; width: 9em; }
+
+  #notices { max-height: 260px; overflow-y: auto; }
+  .notice { display: grid; grid-template-columns: 5.5em 6.5em 1fr; gap: 8px; padding: 5px 2px; border-bottom: 1px solid var(--line); font-size: 13px; }
+  .notice .t { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .lv-ERROR { color: var(--bad); font-weight: 700; } .lv-WARN { color: var(--warn); font-weight: 700; } .lv-INFO { color: var(--info); }
+  .empty { color: var(--muted); font-size: 13px; }
+
+  @media (max-width: 1000px) {
+    .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .main, .grid2 { grid-template-columns: minmax(0, 1fr); }
+  }
+  @media (max-width: 480px) {
+    .big { font-size: 26px; }
+    .notice { grid-template-columns: 4.5em 1fr; }
+    .notice .src { display: none; }
+  }
+</style>
+</head>
+<body>
+<div id="splash">
+<pre id="splash-art">                              ........               ...
+                            :::...............::::---=--:::..
+                         :::......::::---:::--:-=+=====-----::.
+                      :-:..:::::-----::::--:-:-++=-------:..:-=...
+                   .--:..:-=-==-===-=----:--:.-+=-::-====++-.:=-:::..
+                 .:--:::-=+=+*===--:-::---::-:==--:--=+==*++-.:--:---:.
+                 -==-:++***==----:::::--::::::--------=-==++=-.-=-:.:-=-:
+               -++=--****=-:--:::::::.........::::::------=+==::==--::-===:
+             -*+-===##+=--::::::::...........      ..:::::::--=--=------:===:
+            **=====**+=---::--::......                 ....::::-===----:--:-=-
+          :##+====#*====----:::::::...                    ...:::-==-=-==---.:+=
+          ##*+=---+==-===----::-::::...         ......     . ..::-======+===::+*
+         +*+==-:-===-=====--------::::........................  .::-=====++==::+=
+         ***+-:-++--=======--------:::.::.............:..:....:::::.::====++=---+
+         %**-.-====-====+==---------::.....:::.:::..::.....::.:---::.:--===+=-:.==              +*********              :*********-          .:=*#%%@@@@@%%##*+=-:            .***************++==-.
+        ***=-:=-+---=+===+=--------::.........:::............:::::::::::---==---:=              :@@@@@@@@@=           :*@@@@@@@@*.        .=#@@@@@@@@@@@@@@@@@@@@=            *@@@@@@@@@@@@@@@@@@@@@@#=.
+        #+==:-=+---=++======---::::::..    ...:::....     .....:::::::::--:::-:::=               +@@@@@@@@@.        .*@@@@@@@@*:        .+@@@@@@@@@@@@@@@@@@@@@@#            -@@@@@@@@@@@@@@@@@@@@@@@@@@+.
+       =*=+-:-=-=-=*#+====-:::::::::-::::::::::::................::::::----::::..:                %@@@@@@@@*      .+@@@@@@@@*:         :%@@@@@@@#+--::::-=+*%@@@:           .%@@@@@@@%****##%@@@@@@@@@@@@%.
+       =++=:---=+*##*+===-::-==++++++====---::.:...:::::::::::......::::-+=:::::..:               :@@@@@@@@@-   .+@@@@@@@@*:          :@@@@@@@#.              :-            +@@@@@@@@:        :+@@@@@@@@@@*
+       =++=--=+####*+====--====+**#*#*##*++==-:--::---====++===---...::-:==+=::::.:                +@@@@@@@@% .+@@@@@@@@#:           .%@@@@@@@:                            :@@@@@@@@*           :%@@@@@@@@%
+       =++-=-+###*+++=---==+***#****######***+----=++++**#%%%#*=-::.:::--=+++-:.-.:                 %@@@@@@@@#%@@@@@@@#:             =@@@@@@@@%+-:.                        %@@@@@@@%.            +@@@@@@@@%
+       =++===####**+-=--++***+=====++********=----=****##***+===*+=--::---+**+-.:::                 -@@@@@@@@@@@@@@@#:               =@@@@@@@@@@@@@@%#*+-:                +@@@@@@@@-             *@@@@@@@@*
+       =+++=+*##**++------=++#%%@@@@@%%*****+-.. .-##**+**##*+=--=*#+-..:-+**==-:.:                  *@@@@@@@@@@@@#-                 .#@@@@@@@@@@@@@@@@@@@%+.            :@@@@@@@@*             .%@@@@@@@@.
+       *=+++++*+*+---:--===+=:..:.::==+++=++=-.   :**++##**%#%%%##++*=:..:++*=+-:.:                  .%@@@@@@@@@#-                     -*%@@@@@@@@@@@@@@@@@@%.           %@@@@@@@%.             *@@@@@@@@=
+       #+=*+=+++++=====--:::=##**+****++=-.::-:   .:====--:::.....--:..:::++*---::.                   +@@@@@@@@=                          .-=+*#%@@@@@@@@@@@@-          +@@@@@@@@-             +@@@@@@@@*
+       :#+#*-+==*+=:::--::.  .-----:......::--:.  .:..:=+**#####*=:...::::++*+=-==                   :@@@@@@@@*                                  .:*@@@@@@@@@.         :@@@@@@@@*            .#@@@@@@@@+
+        +#**#+=-+=:--::.....      .....:.:::--:.  .:...  ..:::.      ....:+--=.=#                    #@@@@@@@%.                                    .@@@@@@@@+          #@@@@@@@%.          :+@@@@@@@@@-
+         %###*=-=--=-::::::. ..     ......:::::.  .:...    ..  .     ..::.+---:=:                   =@@@@@@@@-                  .%*=.             .#@@@@@@@*          =@@@@@@@@-       .-+%@@@@@@@@@*.
+         #**#=+-==---==----:::::..:-=+++====-:...  .-:::..     ..........:--=+#                    :@@@@@@@@#                   *@@@@%#+=--:::-=+#@@@@@@@@+          :@@@@@@@@@######%@@@@@@@@@@@@+.
+         ++++=+===--=++=========++*+==:.. .:=-:..:.::  .-+=:....:::::::..:-:+**                    #@@@@@@@@.                  :@@@@@@@@@@@@@@@@@@@@@@@@#:           #@@@@@@@@@@@@@@@@@@@@@@@@@*-
+          #+-+*+==-=++++**+***********+==--=++=--::-:...=***+==---------.:=----                   =@@@@@@@@=                   #@@@@@@@@@@@@@@@@@@@@@%+:            =@@@@@@@@@@@@@@@@@@@@@%*+:
+          -*===*==-=********####***+=+#%%%@@%#*****###*==*###***++++++++-:-..=.                   ********+                     .:=+*##%%@@@@@%%#*+-.               **************++==--:
+            =*++*--=******#****+*+----=**++**#%%%@@@%*=-::***#*******+*#=::==
+             :+***-=+++******+**+-----===+++=+*#%#+=-::....+***+*##*****----                    __  __           __    _     __           _____                      __        ____       _
+                  =+++++**++++++============++++=---::...:::=*#*=+##+=-=--                      \ \/ /___  _____/ /_  (_)___/ /___ _     / ___/____ ___  ____ ______/ /_      / __ \_____(_)   _____  _____
+                   *++++=+*++*--=+*#%%%%##%%%%###%%%%###*+==++#=-=+=-:=+                         \  / __ \/ ___/ __ \/ / __  / __ `/_____\__ \/ __ `__ \/ __ `/ ___/ __/_____/ / / / ___/ / | / / _ \/ ___/
+                   =*++++=+*+++-=++++=======--===--:---====-:--:-=-:--+-                         / / /_/ (__  ) / / / / /_/ / /_/ /_____/__/ / / / / / / /_/ / /  / /_/_____/ /_/ / /  / /| |/ /  __/ /
+                    *++++==+*=-*=---====-----==-=----::---:-:.:==:.:-++                         /_/\____/____/_/ /_/_/\__,_/\__,_/     /____/_/ /_/ /_/\__,_/_/   \__/     /_____/_/  /_/ |___/\___/_/
+                    +**+**++**=-==---===+++****+**+==--:::.:::+=::-=++-
+                     ***+****+*+--==-==+========------:::::.:==-=+++++
+                      +*******+*+--=========-------------:.:=-=*#**++
+                       -*++*+*++**=--===------::::::----:.:--=+***#=
+                        +#++++++++*+=--=----::::::::::::::----=*#+
+                        :%%#**+++++++=============---:::----==++
+                        .#%###*********+++********++++=+===+*===
+                       =#=######*****####************##**+*#=-==
+                      *#*:+%#####*******************++++*#*=---=
+                    +%@++= -#%%%%#********************+**+==-::-
+                  *%%%@#++..-+*%%%###**##*************+==+=-:::+ :+
+               -#@%%%%%#+#::.:=+*%%######*######****+=-=++-:-:=+ :@#+=
+             +%%%#%%#%%%+#:::..=++**#############*==----==--::#. +%***%#=
+   =..+***+#%%%######%%@*#=:-:..:=++==+**#######+====------::*+  #%#*##%##+-*=---:
+#######***########%%#%%@#*=:--:...-**++=====+++=+====-----::=#. :#*-.:-=++**#*#@#***+-
+*****#****##########%%%%##--:--.....+#*+++==---------------=#-  #%*+=:::-==+*#@#+**###*+*+</pre>
+<div class="splash-sub">Yoshida Laboratory 1964</div>
+</div>
+<header>
+  <h1>YSD PIUS 走行モニター</h1>
+  <span id="summary" class="pill warn">接続中…</span>
+  <span class="spacer"></span>
+  <span id="link">—</span>
+  <span id="clock">—</span>
+</header>
+
+<div class="wrap">
+  <div id="alerts"></div>
+
+  <div class="cards">
+    <div class="card">
+      <h2>走行モード</h2>
+      <div id="mode" class="big c-idle">—</div>
+      <div id="mode-sub" class="sub"></div>
+      <div class="key"><span class="btn">SHARE</span> ボタンで MANUAL / AUTO を切替</div>
+    </div>
+    <div class="card">
+      <h2>学習データ収集</h2>
+      <div id="rec" class="big c-idle">—</div>
+      <div id="rec-sub" class="sub"></div>
+      <div class="key"><span class="btn">OPTIONS</span> ボタンで記録 ON / OFF を切替</div>
+    </div>
+    <div class="card">
+      <h2>シフト</h2>
+      <div id="shift" class="big c-idle">—</div>
+      <div id="shift-sub" class="sub"></div>
+      <div class="key"><span class="btn">×</span> ボタンで D（前進）/ R（後退）を切替</div>
+    </div>
+    <div class="card">
+      <h2>走行モデル</h2>
+      <div id="model" class="big model c-idle">—</div>
+      <div id="model-sub" class="sub"></div>
+      <div class="key">起動時に <span class="btn">./start_system.sh モデル名</span> で指定</div>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="card">
+      <h2>カメラ画像</h2>
+      <div class="cam">
+        <img id="cam-img" alt="カメラ画像">
+        <canvas id="overlay"></canvas>
+        <div id="nosignal" class="nosignal">カメラ画像を待っています…</div>
+      </div>
+      <div class="cam-meta">
+        <span id="cam-meta">—</span>
+        <span><span class="legend-swatch" style="background:#22d3ee"></span>ステア指令からの予測軌跡（目安）</span>
+        <span id="crop-legend" hidden><span class="legend-swatch" style="background:#e5e7eb"></span>モデルに渡す範囲（破線の枠）</span>
+        <span id="path-legend" hidden><span class="legend-swatch" style="background:#facc15"></span>モデルの進路予測（赤: 注視点）<span id="path-legend-note"></span></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>操作量（-1.0 〜 1.0）</h2>
+      <table>
+        <thead><tr><th></th><th>手動（コントローラー）</th><th>AUTO（モデル出力）</th><th>車両へ出力</th></tr></thead>
+        <tbody id="ctrl-body"></tbody>
+      </table>
+
+      <h2 class="section-gap">車両へ送信した値（PWM）</h2>
+      <table>
+        <tbody>
+          <tr><td class="rowlabel">ステア</td><td><div class="bar center"><div id="pwm-st-bar" class="fill"></div></div></td><td class="num" id="pwm-st">—</td></tr>
+          <tr><td class="rowlabel">スロットル</td><td><div class="bar"><div id="pwm-th-bar" class="fill"></div></div></td><td class="num" id="pwm-th">—</td></tr>
+          <tr><td class="rowlabel">ブレーキ</td><td><div class="bar"><div id="pwm-br-bar" class="fill brake"></div></div></td><td class="num" id="pwm-br">—</td></tr>
+          <tr><td class="rowlabel">ギア状態</td><td id="pwm-state-text" class="detail">—</td><td class="num" id="pwm-state">—</td></tr>
+        </tbody>
+      </table>
+      <div id="pwm-note" class="sub"></div>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <h2>接続状況</h2>
+      <table><tbody id="health-body"></tbody></table>
+    </div>
+
+    <div class="card">
+      <h2>コントローラー入力</h2>
+      <table>
+        <tbody>
+          <tr><td class="rowlabel">左スティック（ステア）</td><td><div class="bar center"><div id="gp-lx" class="fill manual"></div></div></td><td class="num" id="gp-lx-v">—</td></tr>
+          <tr><td class="rowlabel">R2（アクセル）</td><td><div class="bar"><div id="gp-r2" class="fill manual"></div></div></td><td class="num" id="gp-r2-v">—</td></tr>
+          <tr><td class="rowlabel">L2（ブレーキ）</td><td><div class="bar"><div id="gp-l2" class="fill brake"></div></div></td><td class="num" id="gp-l2-v">—</td></tr>
+        </tbody>
+      </table>
+      <div class="chips" id="gp-buttons"></div>
+
+      <h2 class="section-gap">操作方法</h2>
+      <table class="guide">
+        <tbody>
+          <tr><td><span class="btn">左スティック</span></td><td>左右に倒してステアリング操作</td></tr>
+          <tr><td><span class="btn">R2</span></td><td>押し込んでアクセル（R のときは後退）</td></tr>
+          <tr><td><span class="btn">L2</span></td><td>押し込んでブレーキ</td></tr>
+          <tr><td><span class="btn">×</span></td><td>シフト D（前進）/ R（後退）の切替</td></tr>
+          <tr><td><span class="btn">SHARE</span></td><td>走行モード MANUAL / AUTO の切替（AUTOは準備が整っているときのみ）</td></tr>
+          <tr><td><span class="btn">OPTIONS</span></td><td>学習データ記録の ON / OFF（AUTO中は自動で記録しません）</td></tr>
+          <tr><td><span class="btn">Ctrl + C</span></td><td>起動したターミナルで押すとシステム終了（車両は停止・フルブレーキ）</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>自動運転の制御（予測した経路 → 操作量）</h2>
+    <div class="grid2">
+      <div>
+        <div id="ctl-state" class="big model c-idle">—</div>
+        <div id="ctl-reason" class="sub">—</div>
+        <table>
+          <tbody>
+            <tr><td class="rowlabel">目標速度 / 実測</td><td class="num" id="ctl-speed">—</td></tr>
+            <tr><td class="rowlabel">操舵角 / ステア指令</td><td class="num" id="ctl-steer">—</td></tr>
+            <tr><td class="rowlabel">スロットル / ブレーキ</td><td class="num" id="ctl-pedal">—</td></tr>
+            <tr><td class="rowlabel">注視距離 / 曲率</td><td class="num" id="ctl-look">—</td></tr>
+          </tbody>
+        </table>
+        <div id="ctl-unverified" class="sub c-warn"></div>
+      </div>
+      <div>
+        <canvas id="topview" style="width:100%;height:240px;border-radius:8px;background:rgba(127,127,127,.08)"></canvas>
+        <div class="sub">上から見た予測経路（後軸中央が原点、1 m 格子）。黄: waypoint、赤: 注視点</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>IMU / GPS（WitMotion WTGAHRS3）</h2>
+    <div class="grid2">
+      <div>
+        <table>
+          <tbody>
+            <tr><td class="rowlabel">ロール</td><td><div class="bar center"><div id="imu-roll-bar" class="fill"></div></div></td><td class="num" id="imu-roll">—</td></tr>
+            <tr><td class="rowlabel">ピッチ</td><td><div class="bar center"><div id="imu-pitch-bar" class="fill"></div></div></td><td class="num" id="imu-pitch">—</td></tr>
+            <tr><td class="rowlabel">ヨー</td><td><div class="bar center"><div id="imu-yaw-bar" class="fill"></div></div></td><td class="num" id="imu-yaw">—</td></tr>
+            <tr><td class="rowlabel">加速度 [g]</td><td class="detail" colspan="2" id="imu-acc">—</td></tr>
+            <tr><td class="rowlabel">角速度 [°/s]</td><td class="detail" colspan="2" id="imu-gyro">—</td></tr>
+            <tr><td class="rowlabel">温度</td><td class="detail" colspan="2" id="imu-temp">—</td></tr>
+            <tr><td class="rowlabel">車速（車輪）</td><td class="detail" colspan="2" id="wheel-speed">—</td></tr>
+          </tbody>
+        </table>
+        <div id="imu-note" class="sub">ヨー（方位）は地磁気センサーがないため、時間とともに少しずつずれます</div>
+      </div>
+      <div>
+        <div id="gps-fix" class="big model c-idle">—</div>
+        <div id="gps-sub" class="sub">屋外の空が見える場所で測位します（数十秒〜数分）</div>
+        <table>
+          <tbody>
+            <tr><td class="rowlabel">衛星数 / HDOP</td><td class="num" id="gps-sats">—</td></tr>
+            <tr><td class="rowlabel">緯度 / 経度</td><td class="num" id="gps-pos">—</td></tr>
+            <tr><td class="rowlabel">高度</td><td class="num" id="gps-alt">—</td></tr>
+            <tr><td class="rowlabel">速度 / 進行方向</td><td class="num" id="gps-vel">—</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>通知</h2>
+    <div id="notices"><div class="empty">通知はまだありません</div></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+
+// Start-up splash: fit the logo to the window, then fade the logo out, then the background (or on tap / click)
+(function () {
+  const splash = $("splash"), art = $("splash-art");
+  if (!splash) return;
+  const MAX_WIDTH = 1100;   // px: keeps the logo compact on large (e.g. QHD) monitors; phones use 94 % of the width
+  const fit = () => {
+    art.style.fontSize = "10px";
+    const width = Math.min(window.innerWidth * 0.94, MAX_WIDTH);
+    const scale = Math.min(width / art.scrollWidth, window.innerHeight * 0.7 / art.scrollHeight);
+    art.style.fontSize = `${Math.max(2, 10 * scale)}px`;
+  };
+  let fading = false;
+  const hide = () => {
+    if (fading) return;
+    fading = true;
+    splash.classList.add("fade-art");                              // logo fades out (1.4 s)
+    setTimeout(() => splash.classList.add("hide"), 1400);          // then the background (0.5 s)
+    setTimeout(() => splash.remove(), 2000);
+  };
+  fit();
+  window.addEventListener("resize", fit);
+  splash.addEventListener("click", hide);
+  setTimeout(hide, 2500);
+})();
+const POLL_MS = 150;
+const HEALTHY = { camera: ["OK", "DUMMY"], gamepad: ["OK", "DUMMY"], parser: ["OK"], mux: ["OK"],
+                  inference: ["OK"], serial: ["OK"], save: ["RECORDING", "IDLE"], imu: ["OK"], wheel: ["OK"],
+                  control: ["OK"] };
+const OPTIONAL = ["imu", "wheel", "control"];  // not needed for MANUAL driving; shown as a warning instead of an error
+const STATE_TEXT = {
+  OK: "正常", DUMMY: "ダミー動作", DRY_RUN: "送信なし（DRY RUN）", NO_MODEL: "モデル未読込",
+  RECONNECTING: "再接続中", RESTARTING: "再起動中", LOST: "応答なし", WAITING: "起動待ち",
+  RECORDING: "記録中", IDLE: "待機", NO_DATA: "データなし", BLOCKED: "仮の値で停止中",
+};
+
+let camStarted = false;
+let lastOk = 0;
+let lastAlertsKey = "";
+
+function fresh(values, key, maxAge) {
+  const v = values[key];
+  return v && v.age < maxAge ? v.value : null;
+}
+function fmt(v, d = 2) { return v === null || v === undefined ? "—" : (v >= 0 ? "+" : "") + v.toFixed(d); }
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function setBar(el, v, centered) {
+  if (v === null || v === undefined) { el.style.left = "50%"; el.style.width = "0"; return; }
+  if (centered) {
+    const x = clamp(v, -1, 1);
+    el.style.left = (x < 0 ? 50 + x * 50 : 50) + "%";
+    el.style.width = Math.abs(x) * 50 + "%";
+  } else {
+    el.style.left = "0";
+    el.style.width = clamp(v, 0, 1) * 100 + "%";
+  }
+}
+function setText(el, text, cls) {
+  el.textContent = text;
+  if (cls !== undefined) el.className = el.className.split(" ").filter(c => !c.startsWith("c-")).concat(cls ? [cls] : []).join(" ");
+}
+function lightClass(key, state) {
+  if ((HEALTHY[key] || []).includes(state)) return state === "DUMMY" ? "warn" : "ok";
+  if (state === "WAITING") return "idle";
+  if (OPTIONAL.includes(key) && state !== "LOST") return "warn";
+  if (["DRY_RUN", "NO_MODEL", "RECONNECTING", "RESTARTING"].includes(state)) return key === "camera" || key === "gamepad" ? "bad" : "warn";
+  return "bad";
+}
+
+function render(s) {
+  const values = s.values;
+  const health = Object.fromEntries(s.health.map(h => [h.key, h]));
+  const mode = fresh(values, "mode", 1.5);
+  const inf = health.inference;
+  const modelLoaded = inf.state === "OK";
+
+  // --- alerts & summary ---
+  const alerts = [];
+  for (const h of s.health) {
+    if (h.state === "LOST") alerts.push(["bad", `${h.label}が応答していません（ノードが停止している可能性があります）`]);
+  }
+  const cam = health.camera, gp = health.gamepad, ser = health.serial;
+  if (["RECONNECTING", "RESTARTING"].includes(cam.state)) alerts.push(["bad", `カメラ: ${STATE_TEXT[cam.state]} — ${cam.detail}`]);
+  if (gp.state === "RECONNECTING") alerts.push(["bad", "コントローラーが接続されていません。車両は安全停止します。接続を確認してください"]);
+  if (ser.state === "DRY_RUN") alerts.push(["warn", `車両へ送信していません（DRY RUN）: ${ser.detail}`]);
+  if (inf.state === "NO_MODEL") alerts.push(["warn", `モデルが読み込まれていません（${inf.detail}）。AUTO走行は使用できません`]);
+  if (["RECONNECTING", "NO_DATA"].includes(health.imu.state)) alerts.push(["warn", `IMU/GPS: ${health.imu.detail}（走行・記録には影響しません）`]);
+  if (health.wheel.state === "ERROR") alerts.push(["warn", `車速センサー: ${health.wheel.detail}（走行・記録には影響しません）`]);
+  const unv = s.unverified || [];
+  if (unv.length) {
+    const crit = unv.filter(u => u.critical).map(u => u.name);
+    alerts.push(["warn", `仮の値（未確定）のパラメータが ${unv.length} 件あります` +
+      (crit.length ? `（AUTO に必須: ${crit.join("、")}）` : "") + "。tools/check_calibration.py で一覧と求め方を確認してください"]);
+  }
+  for (const n of s.notices) {
+    if (n.level === "ERROR" && n.age < 10) alerts.push(["bad", n.text]);
+  }
+  const alertsKey = JSON.stringify(alerts);
+  if (alertsKey !== lastAlertsKey) {
+    lastAlertsKey = alertsKey;
+    $("alerts").innerHTML = "";
+    const seen = new Set();
+    for (const [cls, text] of alerts) {
+      if (seen.has(text)) continue;
+      seen.add(text);
+      const div = document.createElement("div");
+      div.className = "alert " + cls;
+      div.textContent = text;
+      $("alerts").appendChild(div);
+    }
+  }
+  const summary = $("summary");
+  if (alerts.some(a => a[0] === "bad")) { summary.className = "pill bad"; summary.textContent = "異常あり"; }
+  else if (alerts.length) { summary.className = "pill warn"; summary.textContent = "一部機能制限あり"; }
+  else { summary.className = "pill ok"; summary.textContent = "すべて正常"; }
+
+  // --- status cards ---
+  if (mode === "auto") { setText($("mode"), "AUTO", "c-info"); $("mode-sub").textContent = "AIモデルで自動走行中"; }
+  else if (mode === "manual") {
+    setText($("mode"), "MANUAL", "c-ok");
+    $("mode-sub").textContent = modelLoaded && ["OK", "DUMMY"].includes(cam.state)
+      ? "コントローラーで手動走行中（AUTOに切替可能）" : "コントローラーで手動走行中（AUTOは準備ができていません）";
+  } else { setText($("mode"), "不明", "c-idle"); $("mode-sub").textContent = "モード管理ノードからの状態が届いていません"; }
+
+  const save = fresh(values, "save", 2.0);
+  if (!save) { setText($("rec"), "不明", "c-idle"); $("rec-sub").textContent = "データ保存ノードからの状態が届いていません"; }
+  else if (save.recording) {
+    setText($("rec"), "", "c-bad");
+    $("rec").innerHTML = '<span class="rec-dot"></span>記録中';
+    $("rec-sub").textContent = `${save.frames} フレーム保存済み · ${save.file}`;
+  } else if (!save.enabled) {
+    setText($("rec"), "記録OFF", "c-idle");
+    $("rec-sub").textContent = `${save.frames} フレーム保存済み · 再開するには OPTIONS`;
+  } else {
+    setText($("rec"), "記録待機", "c-warn");
+    $("rec-sub").textContent = `${save.reason || "条件待ち"} · ${save.frames} フレーム保存済み`;
+  }
+
+  const shift = fresh(values, "shift", 1.5);
+  if (shift === "R") { setText($("shift"), "R（後退）", "c-warn"); $("shift-sub").textContent = "R2で後退します"; }
+  else if (shift === "D") { setText($("shift"), "D（前進）", "c-ok"); $("shift-sub").textContent = "R2で前進します"; }
+  else { setText($("shift"), "不明", "c-idle"); $("shift-sub").textContent = "操作解析ノードからの状態が届いていません"; }
+
+  if (modelLoaded) { setText($("model"), inf.detail || "—", "c-ok"); $("model-sub").textContent = "読込完了 · AUTO走行に使用できます"; }
+  else if (inf.state === "NO_MODEL") { setText($("model"), inf.detail || "未読込", "c-bad"); $("model-sub").textContent = "モデルファイルが見つからないか読み込みに失敗しました"; }
+  else { setText($("model"), "—", "c-idle"); $("model-sub").textContent = STATE_TEXT[inf.state] || inf.state; }
+
+  // --- camera ---
+  const camInfo = s.camera || {};
+  const camAlive = camInfo.age !== undefined && camInfo.age < 2.0;
+  if (camAlive && !camStarted) { $("cam-img").src = "/stream.mjpg?" + Date.now(); camStarted = true; }
+  $("nosignal").hidden = camAlive;
+  if (!camAlive) {
+    $("nosignal").textContent = camInfo.age === undefined ? "カメラ画像を待っています…" : `カメラ画像が ${camInfo.age.toFixed(0)} 秒間届いていません`;
+    if (camStarted && camInfo.age > 5) { $("cam-img").removeAttribute("src"); camStarted = false; }
+  }
+  const camSource = camInfo.source === "preview" ? "表示用プレビュー" : "モデル入力と同じ画像";
+  $("cam-meta").textContent = camInfo.width ? `${camInfo.width}×${camInfo.height} · ${camInfo.fps.toFixed(1)} fps · ${camSource}` : "—";
+
+  // --- controls ---
+  const srcs = { manual: fresh(values, "manual", 1.0), auto: fresh(values, "auto", 1.0), final: fresh(values, "final", 1.0) };
+  const rows = [["steering", "ステア", true], ["throttle", "スロットル", true], ["brake", "ブレーキ", false]];
+  const body = $("ctrl-body");
+  if (!body.children.length) {
+    for (const [key, label] of rows) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td class="rowlabel">${label}</td>` + ["manual", "auto", "final"].map(src =>
+        `<td><div class="bar ${key === "brake" ? "" : "center"}"><div id="c-${src}-${key}" class="fill ${key === "brake" ? "brake" : src === "manual" ? "manual" : ""}"></div></div>` +
+        `<div class="sub" id="c-${src}-${key}-v">—</div></td>`).join("");
+      body.appendChild(tr);
+    }
+  }
+  for (const [key, , centered] of rows) {
+    for (const src of ["manual", "auto", "final"]) {
+      const v = srcs[src] ? srcs[src][key] : null;
+      setBar($(`c-${src}-${key}`), v, centered);
+      $(`c-${src}-${key}-v`).textContent = v === null || v === undefined ? "—" : fmt(v);
+    }
+  }
+
+  // --- PWM ---
+  const pwm = fresh(values, "pwm", 1.0);
+  if (pwm && pwm.length >= 4) {
+    const [st, th, br, gear] = pwm;
+    $("pwm-st").textContent = st; $("pwm-th").textContent = th; $("pwm-br").textContent = br; $("pwm-state").textContent = gear;
+    setBar($("pwm-st-bar"), st >= 1500 ? (st - 1500) / 335 : (st - 1500) / 361, true);
+    setBar($("pwm-th-bar"), (th - 1000) / 1000, false);
+    setBar($("pwm-br-bar"), (1948 - br) / (1948 - 1135), false);
+    $("pwm-state-text").textContent = { 0: "D（前進）", 1: "N（停止）", 2: "R（後退）" }[gear] || "不明";
+    const brakePct = Math.round((1948 - br) / (1948 - 1135) * 100);
+    $("pwm-note").textContent = brakePct >= 99 ? "ブレーキ: フルブレーキ（1135）" : brakePct <= 0 ? "ブレーキ: 解放（1948）" : `ブレーキ: ${brakePct}%`;
+  } else if (pwm && pwm.length === 2) {
+    $("pwm-st").textContent = pwm[0]; $("pwm-th").textContent = pwm[1];
+    $("pwm-note").textContent = "DonkeyCarプロトコルで送信中";
+  } else {
+    for (const id of ["pwm-st", "pwm-th", "pwm-br", "pwm-state"]) $(id).textContent = "—";
+    for (const id of ["pwm-st-bar", "pwm-th-bar", "pwm-br-bar"]) setBar($(id), null);
+    $("pwm-state-text").textContent = "—";
+    $("pwm-note").textContent = "送信ノードからの値が届いていません";
+  }
+
+  // --- health ---
+  const hb = $("health-body");
+  hb.innerHTML = "";
+  for (const h of s.health) {
+    const tr = document.createElement("tr");
+    const cls = lightClass(h.key, h.state);
+    tr.innerHTML = `<td class="rowlabel"><span class="light ${cls}"></span>${h.label}</td><td class="state"><b></b></td><td class="detail"></td>`;
+    tr.children[1].firstChild.textContent = STATE_TEXT[h.state] || h.state;
+    tr.children[2].textContent = h.detail || "";
+    hb.appendChild(tr);
+  }
+
+  // --- gamepad ---
+  const g = fresh(values, "gamepad", 1.0);
+  setBar($("gp-lx"), g ? g.axis.lx : null, true); $("gp-lx-v").textContent = g ? fmt(g.axis.lx) : "—";
+  setBar($("gp-r2"), g ? g.axis.r2 : null, false); $("gp-r2-v").textContent = g ? g.axis.r2.toFixed(2) : "—";
+  setBar($("gp-l2"), g ? g.axis.l2 : null, false); $("gp-l2-v").textContent = g ? g.axis.l2.toFixed(2) : "—";
+  const btnLabels = { cross: "×", circle: "○", square: "□", triangle: "△", l1: "L1", r1: "R1", share: "SHARE", option: "OPTIONS", ps: "PS" };
+  const chips = $("gp-buttons");
+  chips.innerHTML = "";
+  for (const [k, label] of Object.entries(btnLabels)) {
+    const span = document.createElement("span");
+    span.className = "chip" + (g && g.buttons[k] ? " on" : "");
+    span.textContent = label;
+    chips.appendChild(span);
+  }
+
+  // --- notices ---
+  const nl = $("notices");
+  if (s.notices.length) {
+    nl.innerHTML = "";
+    for (const n of s.notices) {
+      const div = document.createElement("div");
+      div.className = "notice";
+      const t = new Date(n.t * 1000).toLocaleTimeString("ja-JP", { hour12: false });
+      div.innerHTML = `<span class="t"></span><span class="src"></span><span></span>`;
+      div.children[0].textContent = t;
+      div.children[1].textContent = n.source;
+      div.children[2].textContent = n.text;
+      div.children[2].className = "lv-" + n.level;
+      nl.appendChild(div);
+    }
+  }
+
+  renderImu(fresh(values, "imu", 1.0), health.imu);
+  renderWheel(fresh(values, "wheel", 1.0), health.wheel);
+  renderControl(fresh(values, "control", 1.0), fresh(values, "waypoints", 1.0), health.control, s.unverified || []);
+  drawOverlay(srcs.final, fresh(values, "path", 1.0), mode, s.crop);
+}
+
+function renderWheel(w, h) {
+  const el = $("wheel-speed");
+  if (!w) { el.textContent = h.state === "WAITING" ? "センサーのノードが起動していません" : (h.detail || "—"); return; }
+  const speed = w.speed === null || w.speed === undefined
+    ? (w.circumference > 0 ? "不明（パルス2回目から計算）" : "外周未設定（config.yaml の wheel.circumference_m）")
+    : `${(w.speed * 3.6).toFixed(1)} km/h`;
+  el.textContent = `${speed} ・ 累計 ${w.count} パルス`;
+}
+
+function renderImu(imu, h) {
+  const deg = (v) => v === null || v === undefined ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(1)}°`;
+  const e = imu && imu.euler.length === 3 ? imu.euler : null;
+  [["roll", 0], ["pitch", 1], ["yaw", 2]].forEach(([k, i]) => {
+    setBar($(`imu-${k}-bar`), e ? e[i] / 180 : null, true);
+    $(`imu-${k}`).textContent = e ? deg(e[i]) : "—";
+  });
+  $("imu-acc").textContent = imu && imu.acc.length === 3 ? imu.acc.map(v => fmt(v / 9.80665, 3)).join("  ") : "—";
+  $("imu-gyro").textContent = imu && imu.gyro.length === 3 ? imu.gyro.map(v => fmt(v, 1)).join("  ") : "—";
+  $("imu-temp").textContent = imu && imu.temp !== null ? `${imu.temp.toFixed(1)} ℃` : "—";
+  const note = $("imu-note");
+  if (!imu) {
+    note.textContent = h.state === "WAITING" ? "IMUノードが起動していません（use_imu:=false の可能性）" : `${STATE_TEXT[h.state] || h.state}: ${h.detail}`;
+    note.className = "sub c-warn";
+  } else if (imu.gyro_saturated) {
+    note.textContent = "角速度が測定範囲（±500°/s）に達しました。姿勢・加速度の値がしばらく不正確になる可能性があります";
+    note.className = "sub c-bad";
+  } else {
+    note.textContent = "ヨー（方位）は地磁気センサーがないため、時間とともに少しずつずれます";
+    note.className = "sub";
+  }
+
+  const g = imu ? imu.gps : null;
+  if (!g) {
+    setText($("gps-fix"), "—", "c-idle");
+    for (const id of ["gps-sats", "gps-pos", "gps-alt", "gps-vel"]) $(id).textContent = "—";
+    return;
+  }
+  setText($("gps-fix"), g.fix ? "測位中" : "未測位", g.fix ? "c-ok" : "c-warn");
+  $("gps-sub").textContent = g.fix ? "GPSで現在地を取得しています" : "屋外の空が見える場所で測位します（数十秒〜数分）";
+  $("gps-sats").textContent = `${g.sats ?? "—"} / ${g.hdop !== null && g.hdop !== undefined ? g.hdop.toFixed(1) : "—"}`;
+  $("gps-pos").textContent = g.fix ? `${g.lat.toFixed(6)}, ${g.lon.toFixed(6)}` : "—";
+  $("gps-alt").textContent = g.fix && g.alt !== null ? `${g.alt.toFixed(1)} m` : "—";
+  $("gps-vel").textContent = g.fix && g.speed !== null ? `${(g.speed * 3.6).toFixed(1)} km/h / ${g.heading.toFixed(0)}°` : "—";
+}
+
+function drawOverlay(final, path, mode, crop) {
+  const canvas = $("overlay");
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  if (canvas.width !== Math.round(rect.width * dpr) || canvas.height !== Math.round(rect.height * dpr)) {
+    canvas.width = Math.round(rect.width * dpr); canvas.height = Math.round(rect.height * dpr);
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, rect.width, rect.height);
+  // The image keeps its aspect ratio inside the box (object-fit: contain)
+  const img = $("cam-img");
+  const ar = img.naturalWidth && img.naturalHeight ? img.naturalWidth / img.naturalHeight : 16 / 9;
+  let w = rect.width, h = rect.width / ar;
+  if (h > rect.height) { h = rect.height; w = h * ar; }
+  const ox = (rect.width - w) / 2, oy = (rect.height - h) / 2;
+
+  // Region the model sees (camera.crop): adjust the crop so that the sky is outside this frame
+  $("crop-legend").hidden = !crop;
+  if (crop && img.naturalWidth && Math.abs(img.naturalWidth / img.naturalHeight - 16 / 9) < 0.05) {   // only on the 16:9 preview
+    ctx.save();
+    ctx.setLineDash([6, 4]);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "rgba(250,250,250,.85)";
+    ctx.strokeRect(ox + crop[0] * w + 1, oy + crop[1] * h + 1, crop[2] * w - 2, crop[3] * h - 2);
+    ctx.restore();
+  }
+
+  if (final && final.steering !== null && final.steering !== undefined) {
+    const steer = clamp(final.steering, -1, 1);
+    ctx.lineWidth = Math.max(3, w / 90);
+    ctx.lineCap = "round";
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      for (let i = 0; i <= 20; i++) {
+        const t = i / 20;
+        const x = ox + w / 2 + side * w * 0.16 * (1 - t * 0.6) + steer * w * 0.45 * t * t;
+        const y = oy + h - t * h * 0.55;
+        i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+      }
+      ctx.strokeStyle = mode === "auto" ? "rgba(96,165,250,.9)" : "rgba(34,211,238,.85)";
+      ctx.stroke();
+    }
+  }
+
+  const points = path && Array.isArray(path.points) ? path.points.filter(p => p) : null;
+  $("path-legend").hidden = !points;
+  $("path-legend-note").textContent = path && path.provisional ? "（カメラの位置・向きは仮の値。キャリブレーション前はずれます）" : "";
+  if (points && points.length > 1) {
+    ctx.beginPath();
+    points.forEach(([px, py], i) => {
+      const x = ox + px * w, y = oy + py * h;
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    });
+    ctx.strokeStyle = "rgba(250,204,21,.95)";
+    ctx.lineWidth = Math.max(3, w / 80);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(250,204,21,.95)";
+    for (const [px, py] of points) { ctx.beginPath(); ctx.arc(ox + px * w, oy + py * h, Math.max(3, w / 120), 0, 7); ctx.fill(); }
+  }
+  if (path && path.lookahead) {
+    ctx.fillStyle = "rgba(239,68,68,.95)";
+    ctx.beginPath(); ctx.arc(ox + path.lookahead[0] * w, oy + path.lookahead[1] * h, Math.max(5, w / 80), 0, 7); ctx.fill();
+  }
+}
+
+const sgn = (v, d) => v === null || v === undefined ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(d)}`;
+
+function renderControl(c, wp, h, unv) {
+  const st = $("ctl-state"), rs = $("ctl-reason");
+  const set = (id, text) => { $(id).textContent = text; };
+  if (!c) {
+    st.textContent = h.state === "WAITING" ? "起動待ち" : (STATE_TEXT[h.state] || h.state);
+    st.className = "big model c-idle";
+    rs.textContent = h.state === "WAITING" ? "制御ノードが起動していません" : (h.detail || "—");
+    ["ctl-speed", "ctl-steer", "ctl-pedal", "ctl-look"].forEach(id => set(id, "—"));
+    drawTop(wp ? wp.points : null, null);
+  } else {
+    st.textContent = c.ready ? (c.mode === "auto" ? "AUTO で制御中" : "準備完了（MANUAL 中）") : "操作量を出していません";
+    st.className = "big model " + (c.ready ? (c.mode === "auto" ? "c-info" : "c-ok") : "c-warn");
+    rs.textContent = c.ready ? (c.allow_unverified && (c.unverified || []).length ? "⚠ 仮の値のまま動作中（試験用の設定）"
+                                                                                  : "SHARE で AUTO に切り替えられます") : c.reason;
+    const kmh = (v) => v === null || v === undefined ? "—" : (v * 3.6).toFixed(1);
+    set("ctl-speed", `${kmh(c.v_target)} / ${kmh(c.v_meas !== undefined ? c.v_meas : c.speed)} km/h`);
+    set("ctl-steer", c.delta_deg !== undefined ? `${sgn(c.delta_deg, 1)}° / ${sgn(c.steer, 2)}` : "—");
+    set("ctl-pedal", c.throttle !== undefined ? `${c.throttle.toFixed(2)} / ${c.brake.toFixed(2)}` : "—");
+    set("ctl-look", c.lookahead_m !== undefined ? `${c.lookahead_m.toFixed(1)} m / ${(c.curvature || 0).toFixed(3)} /m` : "—");
+    drawTop(c.path && c.path.length ? c.path : (wp ? wp.points : null), c.lookahead);
+  }
+  const crit = unv.filter(u => u.critical).map(u => u.name);
+  $("ctl-unverified").textContent = unv.length ? `仮の値のパラメータ ${unv.length} 件（AUTO に必須: ${crit.join("、") || "なし"}）` : "";
+}
+
+function drawTop(points, la) {
+  const canvas = $("topview");
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  if (canvas.width !== Math.round(rect.width * dpr) || canvas.height !== Math.round(rect.height * dpr)) {
+    canvas.width = Math.round(rect.width * dpr); canvas.height = Math.round(rect.height * dpr);
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, rect.width, rect.height);
+  const W = rect.width, H = rect.height, scale = Math.min(W / 6.5, (H - 30) / 6.5);
+  const X = (y) => W / 2 - y * scale, Y = (x) => H - 30 - x * scale;   // x forward = up, y left = left
+  ctx.strokeStyle = "rgba(127,127,127,.25)"; ctx.lineWidth = 1;
+  for (let x = 0; x <= 6; x++) { ctx.beginPath(); ctx.moveTo(0, Y(x)); ctx.lineTo(W, Y(x)); ctx.stroke(); }
+  for (let y = -3; y <= 3; y++) { ctx.beginPath(); ctx.moveTo(X(y), 0); ctx.lineTo(X(y), H); ctx.stroke(); }
+  ctx.fillStyle = "rgba(127,127,127,.6)";
+  ctx.font = "11px sans-serif";
+  for (let x = 1; x <= 6; x++) ctx.fillText(`${x} m`, X(-3) - 30, Y(x) + 4);
+  ctx.fillStyle = "rgba(100,116,139,.55)";                               // the car: rear axle at the origin
+  ctx.fillRect(X(0.6), Y(2.0), 1.2 * scale, 2.5 * scale);
+  ctx.fillStyle = "rgba(15,23,42,.9)";
+  ctx.beginPath(); ctx.arc(X(0), Y(0), 4, 0, 7); ctx.fill();
+  if (points && points.length) {
+    ctx.strokeStyle = "rgba(234,179,8,.95)"; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(X(0), Y(0));
+    for (const [x, y] of points) ctx.lineTo(X(y), Y(x));
+    ctx.stroke();
+    ctx.fillStyle = "rgba(234,179,8,.95)";
+    for (const [x, y] of points) { ctx.beginPath(); ctx.arc(X(y), Y(x), 4, 0, 7); ctx.fill(); }
+  }
+  if (la) { ctx.fillStyle = "rgba(239,68,68,.95)"; ctx.beginPath(); ctx.arc(X(la[1]), Y(la[0]), 6, 0, 7); ctx.fill(); }
+}
+
+async function poll() {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 1500);
+    const res = await fetch("/api/state", { cache: "no-store", signal: ctrl.signal });
+    clearTimeout(timer);
+    const s = await res.json();
+    lastOk = Date.now();
+    render(s);
+    $("link").textContent = "ダッシュボード接続中";
+  } catch (e) {
+    if (Date.now() - lastOk > 2000) {
+      $("summary").className = "pill bad";
+      $("summary").textContent = "通信断";
+      $("link").textContent = "ダッシュボードと通信できません（システムが停止している可能性があります）";
+      $("alerts").innerHTML = '<div class="alert bad">ダッシュボードと通信できません。システムが起動しているか確認してください</div>';
+      lastAlertsKey = "";
+    }
+  } finally {
+    setTimeout(poll, POLL_MS);
+  }
+}
+
+setInterval(() => { $("clock").textContent = new Date().toLocaleTimeString("ja-JP", { hour12: false }); }, 500);
+poll();
+</script>
+</body>
+</html>
